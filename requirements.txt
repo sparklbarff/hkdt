@@ -1,0 +1,6 @@
+requests
+beautifulsoup4
+langdetect
+nltk
+spacy
+tqdm
