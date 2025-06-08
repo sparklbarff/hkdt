@@ -2,6 +2,8 @@ import re
 import requests
 from bs4 import BeautifulSoup
 from pathlib import Path
+import sys
+import random
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -26,6 +28,21 @@ RESULT_DIR = BASE_DIR / "results"
 ZINE_FILE = RESULT_DIR / "haiku_zine.md"
 TOP_URL = "https://www.gutenberg.org/browse/scores/top"
 
+# Spinner and messages
+spinner = deque('|/-\\')
+deadpan_lines = [
+    "Assessing literary potential…",
+    "Counting syllables with stoic precision…",
+    "Scanning the classics for accidental poetry…",
+    "Polishing haiku gems…",
+]
+
+def spin(msg: str):
+    """Rotate the spinner and print a progress message."""
+    spinner.rotate(1)
+    sys.stdout.write(f"\r{spinner[0]} {msg}")
+    sys.stdout.flush()
+
 # Limits
 MAX_BOOKS = 100
 TARGET_HAIKU_COUNT = 100
@@ -36,26 +53,44 @@ RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Utilities
 def clean_filename(name: str) -> str:
+    """Sanitize a string so it can be used as a filename."""
     return re.sub(r"[^A-Za-z0-9 _\-\.]", "", name).strip()
 
 
+def simple_clean(text: str) -> str:
+    """Lowercase and remove punctuation from text, collapsing extra spaces."""
+    lines = []
+    for ln in text.splitlines():
+        cleaned = re.sub(r"[^a-z ]+", "", ln.lower())
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if cleaned:
+            lines.append(cleaned)
+    return "\n".join(lines)
+
+
 def count_syllables(word: str) -> int:
+    """Return a simple syllable count for ``word``."""
     w = word.lower()
     if w in syllable_dict:
-        return min(len([s for s in pron if s[-1].isdigit()]) for pron in syllable_dict[w])
+        return min(
+            len([s for s in pron if s[-1].isdigit()])
+            for pron in syllable_dict[w]
+        )
     return len(re.findall(r"[aeiouy]+", w)) or 1
 
 
 def is_valid_line(words: list[str]) -> bool:
+    """Return ``True`` if ``words`` form a minimally valid haiku line."""
     if len(words) < 2:
         return False
     if any(char.isdigit() for w in words for char in w):
         return False
     line = " ".join(words)
-    return line[0].isupper() and len(line) >= 5
+    return len(line) >= 5
 
 
 def sliding_windows(words: list[str], sizes: tuple[int, ...]):
+    """Yield segments of ``words`` matching the given syllable pattern."""
     total = sum(sizes)
     for i in range(len(words) - total + 1):
         segments, cursor = [], i
@@ -73,6 +108,7 @@ def sliding_windows(words: list[str], sizes: tuple[int, ...]):
 
 # Download helper
 def download_text(link) -> Path | None:
+    """Download and clean a Gutenberg text link, returning the saved path."""
     href = link.get('href', '')
     if not href.startswith('/ebooks/'):
         return None
@@ -100,7 +136,7 @@ def download_text(link) -> Path | None:
                     break
                 if main:
                     body.append(ln)
-            clean_text = "\n".join(body)
+            clean_text = simple_clean("\n".join(body))
             if not clean_text.strip():
                 return None
             header = lines[:200]
@@ -111,12 +147,14 @@ def download_text(link) -> Path | None:
             out = TEXT_DIR / fname
             out.write_text(clean_text, encoding='utf-8')
             return out
-        except:
+        except Exception as e:
+            print(f"Download failed for {url}: {e}", file=sys.stderr)
             continue
     return None
 
 # Fetch top texts
 def fetch_top_texts():
+    """Fetch the top books list and download texts in parallel."""
     print('📕 Starting Gutenberg download…')
     r = requests.get(TOP_URL, timeout=10)
     soup = BeautifulSoup(r.text, 'html.parser')
@@ -127,21 +165,28 @@ def fetch_top_texts():
         if ol:
             links.extend(ol.find_all('a', href=True))
     saved = 0
-    for link in tqdm(links, total=MAX_BOOKS, desc='Downloading', leave=False):
-        if saved >= TARGET_HAIKU_COUNT:
-            break
-        path = download_text(link)
-        if path:
-            saved += 1
+    desc = random.choice(deadpan_lines)
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = [ex.submit(download_text, lk) for lk in links[:MAX_BOOKS]]
+        for fut in tqdm(as_completed(futures), total=len(futures), desc=desc, leave=False):
+            spin(desc)
+            path = fut.result()
+            if path:
+                saved += 1
+            if saved >= TARGET_HAIKU_COUNT:
+                break
+    sys.stdout.write('\n')
     print(f"✅ Completed downloads: {saved} texts saved to {TEXT_DIR}")
 
 # Scan helper
 def scan_file(path: Path) -> list[list[str]]:
+    """Scan ``path`` for haikus and return a list of line triplets."""
     text = path.read_text(errors='ignore')
     try:
         if detect(text[:2000]) != 'en':
             return []
-    except:
+    except Exception as e:
+        print(f"Language detection failed for {path}: {e}", file=sys.stderr)
         return []
     lines = text.splitlines()
     body, main = [], False
@@ -154,8 +199,12 @@ def scan_file(path: Path) -> list[list[str]]:
             break
         if main:
             body.append(ln)
+    if not body:
+        body = lines
+    clean_text = simple_clean("\n".join(body))
     found = set()
-    for sent in tqdm(nlp("\n".join(body)).sents, desc='Scanning', leave=False):
+    for sent in tqdm(nlp(clean_text).sents, desc='Scanning', leave=False):
+        spin("Scanning text…")
         words = [w.text for w in sent if w.is_alpha]
         for form in ((5,7,5),(3,5,3)):
             for h in sliding_windows(words, form):
@@ -164,11 +213,13 @@ def scan_file(path: Path) -> list[list[str]]:
 
 # Main
 def main():
+    """Download texts, scan them for haikus, and write Markdown results."""
     fetch_top_texts()
     files = list(TEXT_DIR.glob('*.txt'))[:MAX_BOOKS]
     print(f'⚙️ Scanning {len(files)} text files for haikus…')
     total, zine = 0, ['# Accidental Haikus\n']
     for fpath in files:
+        spin("Processing file…")
         haikus = scan_file(fpath)
         if not haikus:
             continue
