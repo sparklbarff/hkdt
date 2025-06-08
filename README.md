@@ -1,71 +1,93 @@
-# hkdt
+hkdt - Accidental Haiku Detector
 
-Haiku Detector
+Purpose:
+A self‑contained, beginner‑accessible Python script (hkdt\_v3.py) that automatically:
 
-This repository contains a Python-based haiku detection script. The canonical file is `hkdt_v3.py` and it runs without command-line arguments. All configuration and paths are internal.
+* Downloads the top 100 titles from Project Gutenberg’s “Top 100 Yesterday” list.
+* Cleans each text, removes Gutenberg boilerplate, normalises punctuation, and stores the result as "Author - Title.txt" in the texts/ directory.
+* Scans every cleaned file for accidental haikus in both 5‑7‑5 (17‑syllable) and 3‑5‑3 (11‑syllable) forms using a sliding‑window syllable counter.
+* Collects validated haikus, groups them by source, and publishes them to results/haiku\_zine.md and to individual per‑book files.
 
-## File Structure
+Installation:
 
-```
-./hkdt_v3.py
-./texts/                 # cleaned downloads
-./results/               # generated haiku files
-    haiku_zine.md
-```
+1. Clone the repository.
+2. (Optional) create and activate a virtual environment.
+3. pip install -r requirements.txt
+4. python -m spacy download en\_core\_web\_sm
+5. python -c "import nltk, sys; nltk.download('cmudict')"
 
-## Process Overview
-1. Download the top 100 texts from [Project Gutenberg's Top 100 Yesterday](https://www.gutenberg.org/browse/scores/top#books-last1).
-2. Filter out non-English files using `langdetect`.
-3. Extract author and title from the Gutenberg header via `text.splitlines()`.
-4. Strip boilerplate text matching "START OF THE PROJECT GUTENBERG" and "END OF" markers.
-5. Convert text to lowercase and remove punctuation, then save as `Author - Title.txt` in `texts/`.
-6. Detect accidental haikus by sliding word windows.
-7. Target forms are 5‑7‑5 and 3‑5‑3 syllable patterns.
-8. Tokenization uses spaCy (`en_core_web_sm`) with a sentencizer.
-9. Syllables are counted with NLTK's `cmudict`, falling back to the regex `[aeiouy]+`.
-10. Lines with numerals or fewer than two words are skipped.
-11. Results are compiled into `results/haiku_zine.md`, grouped under `## Author – Title`. Each haiku is three lines followed by a blank line. Individual results for each book are written to `results/Author - Title.txt`.
+Running:
+python hkdt\_v3.py
+All progress appears inline: a spinner or progress bar with rotating deadpan messages. Download and scan phases run in parallel using a ThreadPoolExecutor set to eight workers. Upon completion the script prints a summary and exits.
 
-### Example
+Workflow Details:
+Download Phase:
 
-```
-Mary Shelley – Frankenstein
+* Scrape the Gutenberg index page.
+* Fetch plain‑text UTF‑8 files; retry on transient errors with exponential back‑off.
 
-A strange trembling sound
-Rattled the leaves near the tent
-Then it was silent
-```
+Cleaning Phase:
 
-## Runtime Behavior
-* Uses a `ThreadPoolExecutor` (up to 8 workers) to download books in parallel.
-* Displays a spinner or progress bar during scanning and downloads.
-* Deadpan progress messages rotate while running.
-* Progress is printed inline with no external logging.
+* Locate "\*\*\* START OF THE PROJECT GUTENBERG" and "\*\*\* END" markers; discard text outside these boundaries.
+* Convert CRLF or CR line endings to LF.
+* Convert to lowercase and strip punctuation (apostrophes retained).
+* Extract Title: and Author: headers; default to "Unknown" if absent.
+* Save to texts/ using the format Author - Title.txt.
 
-## Guardrails
-* No command-line flags or runtime arguments.
-* No alternative output formats.
-* Avoid large refactors or class-based architectures.
-* Keep the code beginner-friendly.
+Tokenisation and Syllable Counting:
 
-## Dependencies
+* spaCy (en\_core\_web\_sm) provides sentence and token boundaries.
+* NLTK cmudict gives primary syllable counts; missing words fall back to a regex heuristic: \[aeiouy]+.
+* Tokens containing numerals or with fewer than two alphabetic characters are ignored.
 
-```bash
-pip install -r requirements.txt
-python3 -m spacy download en_core_web_sm
-python3 -c "import nltk; nltk.download('cmudict')"
-```
+Sliding‑Window Haiku Detection:
 
-### Running
+* Window sizes of 17 and 11 words slide through each sentence‑sequence.
+* For each window the total syllable count must equal 17 or 11.
+* The algorithm iterates over possible split points to achieve 5‑7‑5 or 3‑5‑3.
+* Reject windows with all‑caps words, digits, or any line having fewer than two words.
+* Store unique haikus only; duplicates are discarded.
 
-```bash
-python hkdt_v3.py
-```
+Output Assembly:
 
-Outputs are saved in the `texts/` and `results/` folders.
+* Write each book’s haikus to results/Author - Title.txt.
+* Build haiku\_zine.md: an index showing book counts, followed by "## Author - Title" headers and the book’s haikus (three lines plus blank line).
 
-### Testing
+Runtime Behaviour:
 
-```bash
-pytest
-```
+* Eight download threads (constant MAX\_WORKERS) running via ThreadPoolExecutor.
+* Animated spinner (| / - ) or tqdm progress bar during long operations.
+* No GUI, no external logging; console output only when necessary.
+
+Guardrails:
+
+* No command‑line switches, dynamic arguments, or alternative output formats.
+* No refactors introducing class hierarchies or configuration files.
+* Code remains readable for beginners; imperative style only.
+* Project adheres to internal "no em dash" policy; plain hyphens or en‑dashes allowed.
+
+Dependencies:
+
+* requests
+* beautifulsoup4
+* spacy >= 3.7
+* nltk
+* tqdm
+* langdetect
+
+Testing:
+pytest discovers the unit tests located beside hkdt\_v3.py.
+
+Extending the Script (quick hints):
+
+* Add new haiku forms: edit the TARGET\_PATTERNS list.
+* Change thread count: edit MAX\_WORKERS.
+* Skip downloads when books already exist: set SKIP\_DOWNLOAD = True.
+* Enable optional JSON debug logging: uncomment DEBUG\_JSON = True in the script.
+
+Contributing Guidelines:
+
+* Open an issue before submitting pull requests.
+* Follow the no‑flag, no‑em‑dash rule.
+* Include unit tests and run pre‑commit formatting hooks.
+  \\
